@@ -1,0 +1,18 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An AWS SAM template for setting up an MC server living inside of AWS
+Resources:
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: mc-server-repository
+Outputs:
+  ECR:
+    Description: ECR for MC app containers
+    Value:
+      Fn::GetAtt:
+      - ECRRepository
+      - RepositoryUri
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-ECRUrl
