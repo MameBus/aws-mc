@@ -1,0 +1,1 @@
+AWS IAC to deploy an MC server inside of an ECS container
