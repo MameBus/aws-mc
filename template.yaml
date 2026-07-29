@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: An AWS CloudFormation template for setting up an MC server living inside of AWS
+
+Parameters:
+  AppName:
+    Description: "Name of the App to logically collect resources"
+    Type: String
+    Default: McServer
+  EC2KeyPair:
+    Description: "Name of the Key pair for assigning to the EC2"
+    Type: String
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+
+Resources:
+  ServerVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: 
+        - Key: AppName
+          Value: !Ref AppName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - Key: AppName
+          Value: !Ref AppName
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ServerVpc
+      InternetGatewayId: !Ref InternetGateway
+  
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ServerVpc
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ServerVpc
+      Tags:
+      - Key: AppName
+        Value: !Ref AppName
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Minecraft traffic into EC2
+      VpcId: !Ref ServerVpc
+      SecurityGroupIngress:
+        - Description: Minecraft Java Edition
+          IpProtocol: tcp
+          FromPort: 25565
+          ToPort: 25565
+          CidrIp: 0.0.0.0/0
+        - Description: SSH Access
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+  MinecraftServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: minecraft-server-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+  MinecraftInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: minecraft-server-instance-profile
+      Roles:
+        - !Ref MinecraftServerRole
+
+  Server:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.medium
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref ServerSecurityGroup
+      KeyName: !Ref EC2KeyPair
+      IamInstanceProfile: !Ref MinecraftInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 40
+            VolumeType: gp3
+            DeleteOnTermination: false
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -e
+
+          # Update packages
+          yum update -y
+
+          # Install Java
+          yum install -y java-25-amazon-corretto
+
+          # Create minecraft user
+          useradd minecraft
+
+          # Create server directory
+          mkdir -p /opt/minecraft
+          chown minecraft:minecraft /opt/minecraft
+
+          # Download Minecraft server
+          sudo -u minecraft curl -o /opt/minecraft/server.jar \
+            https://piston-data.mojang.com/v1/objects/823e2250d24b3ddac457a60c92a6a941943fcd6a/server.jar
+
+          # Accept EULA
+          echo "eula=true" | sudo -u minecraft tee /opt/minecraft/eula.txt > /dev/null
+
+          # Create systemd service
+          cat > /etc/systemd/system/minecraft.service <<EOF
+          [Unit]
+          Description=Minecraft Server
+          After=network.target
+
+          [Service]
+          User=minecraft
+          WorkingDirectory=/opt/minecraft
+          ExecStart=/usr/bin/java -Xms2G -Xmx2G -jar server.jar nogui
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable minecraft
+          systemctl start minecraft
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+  ElasticIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Server
+
+Outputs:
+  MinecraftServerIP:
+    Description: Public IP address
+    Value: !GetAtt ElasticIp.PublicIp

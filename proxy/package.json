@@ -1,0 +1,23 @@
+{
+  "name": "proxy",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1097.0",
+    "@types/node": "^26.1.2",
+    "node-schedule": "^2.1.1",
+    "typescript": "^7.0.2"
+  },
+  "devDependencies": {
+    "@types/node-schedule": "^2.1.8"
+  }
+}
